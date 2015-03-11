@@ -1,4 +1,5 @@
 require 'connection_pool'
+require 'erb'
 
 module React
   class Renderer
@@ -12,19 +13,20 @@ module React
 
     cattr_accessor :pool
 
-    def self.setup!(react_js, components_js, args={})
+    def self.setup!(react_js, components_js, prerender_snippet, args={})
       args.assert_valid_keys(:size, :timeout)
       @@react_js = react_js
       @@components_js = components_js
+      @@prerender_template = ERB.new(prerender_snippet)
       @@pool.shutdown{} if @@pool
       reset_combined_js!
       default_pool_options = {:size =>10, :timeout => 20}
       @@pool = ConnectionPool.new(default_pool_options.merge(args)) { self.new }
     end
 
-    def self.render(component, args={})
+    def self.render(component, url_path, args={})
       @@pool.with do |renderer|
-        renderer.render(component, args)
+        renderer.render(component, url_path, args)
       end
     end
 
@@ -40,14 +42,30 @@ module React
       @context ||= ExecJS.compile(self.class.combined_js)
     end
 
-    def render(component, args={})
+    def render(component, url_path, args={})
       react_props = React::Renderer.react_props(args)
       jscode = <<-JS
-        function() {
-          return React.renderToString(React.createElement(#{component}, #{react_props}));
+        function __reactRailsWrapper__(){
+          var __outputObj__ = {outputValue: null};
+          var __done__ = function(value){
+            __outputObj__.outputValue = value;
+          };
+
+          // No-op just in case.
+          function reactRailsRender(){}
+
+          #{@@prerender_template.result(binding)}
+
+          try {
+            reactRailsRender(__done__);
+          } catch (e) {
+            __outputObj__.outputValue = e.stack;
+            throw e;
+          }
+          return __outputObj__;
         }()
       JS
-      context.eval(jscode).html_safe
+      context.eval(jscode)['outputValue'].html_safe
     rescue ExecJS::ProgramError => e
       raise PrerenderError.new(component, react_props, e)
     end

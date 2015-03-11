@@ -14,6 +14,11 @@ module React
       config.react.timeout = 20 #seconds
       config.react.react_js = lambda {File.read(::Rails.application.assets.resolve('react.js'))}
       config.react.component_filenames = ['components.js']
+      config.react.prerender_snippet = <<-JS
+        function() {
+          return React.renderToString(React.createElement(<%= component %>, <%= react_props %>));
+        }()
+      JS
 
       # Watch .jsx files for changes in dev, so we can reload the JS VMs with the new JS code.
       initializer "react_rails.add_watchable_files", group: :all do |app|
@@ -71,7 +76,7 @@ module React
 
         do_setup = lambda do
           cfg = app.config.react
-          React::Renderer.setup!( cfg.react_js, cfg.components_js,
+          React::Renderer.setup!( cfg.react_js, cfg.components_js, cfg.prerender_snippet,
                                 {:size => cfg.max_renderers, :timeout => cfg.timeout})
         end
 
