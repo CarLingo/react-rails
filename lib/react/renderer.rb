@@ -6,6 +6,9 @@ module React
 
     class PrerenderError < RuntimeError
       def initialize(component_name, props, js_message)
+        if props.length > 50
+          props = props[0...47] + '...'
+        end
         message = "Encountered error \"#{js_message}\" when prerendering #{component_name} with #{props}"
         super(message)
       end
@@ -13,13 +16,17 @@ module React
 
     cattr_accessor :pool
 
-    def self.setup!(react_js, components_js, prerender_snippet, args={})
+    def self.setup!(react_js, components_js, components_js_map, prerender_snippet, args={})
       args.assert_valid_keys(:size, :timeout)
       @@react_js = react_js
-      @@components_js = components_js
+      @@components_js_map = components_js_map
       @@prerender_template = ERB.new(prerender_snippet)
       @@pool.shutdown{} if @@pool
-      reset_combined_js!
+
+      components_js_map.call.each do |k, v|
+        reset_combined_js_map! k
+      end
+
       default_pool_options = {:size =>10, :timeout => 20}
       @@pool = ConnectionPool.new(default_pool_options.merge(args)) { self.new }
     end
@@ -38,8 +45,9 @@ module React
       end
     end
 
-    def context
-      @context ||= ExecJS.compile(self.class.combined_js)
+    def context(cmp_name)
+      @context ||= {}
+      @context[cmp_name] ||= ExecJS.compile(self.class.combined_js_map[cmp_name])
     end
 
     def render(component, url_path, args={})
@@ -65,19 +73,65 @@ module React
           return __outputObj__;
         }()
       JS
-      context.eval(jscode)['outputValue'].html_safe
+      context(component).eval(jscode)['outputValue'].html_safe
     rescue ExecJS::ProgramError => e
+      puts "\nJavascript Error Message:".blue + " #{e}".red
+      if ::Rails.env.development?
+        source_str = self.class.combined_js + jscode
+        puts "Stack Trace with context: (most recent call first)".blue
+        i = 0
+        e.backtrace.each do |frame|
+          puts "Frame ##{i}:".blue
+          puts frame
+          i += 1
+        end
+      end
       raise PrerenderError.new(component, react_props, e)
+    rescue Exception => e
+      puts "\nJavascript Error Message:".blue + " #{e.value}".red
+      if ::Rails.env.development?
+        source_str = self.class.combined_js_map[component] + jscode
+        puts "Stack Trace with context: (most recent call first)".blue
+        i = 0
+        e.javascript_backtrace.each do |frame|
+          puts "Frame ##{i}:".blue
+          puts stack_frame_to_s(frame, source_str)
+          i += 1
+        end
+      end
+      raise PrerenderError.new(component, react_props, e)
+    end
+
+    def stack_frame_to_s(frame, source_str)
+      fline = frame.line_number - 1
+      fstart = fline - 3
+      fend = fline + 3
+
+      frame_str = "<lines #{fstart + 1} through #{fend + 1}>: \n\t".blue
+      frame_str += source_str.split("\n")[fstart...fline].join("\n\t")
+      frame_str += "\n\t" + source_str.split("\n")[fline].red
+      frame_str += "\n\t" + source_str.split("\n")[fline+1...fend].join("\n\t")
+      frame_str += "\n"
+      frame_str
     end
 
 
     private
 
-    def self.setup_combined_js
+    def self.setup_combined_js_map(cmp_name)
       <<-CODE
         var global = global || this;
         var self = self || this;
         var window = window || this;
+
+        function setTimeout(fn, ms) {
+          fn();
+          return 0;
+        };
+        function clearTimeout() {};
+
+        var localStorage = {};
+        var document = {};
 
         var console = global.console || {};
         ['error', 'log', 'info', 'warn'].forEach(function (fn) {
@@ -86,18 +140,19 @@ module React
           }
         });
 
-        #{@@react_js.call};
+        #{@@components_js_map.call['Core']};
         React = global.React;
-        #{@@components_js.call};
+        #{@@components_js_map.call[cmp_name]};
       CODE
     end
 
-    def self.reset_combined_js!
-      @@combined_js = setup_combined_js
+    def self.reset_combined_js_map!(cmp_name)
+      @@combined_js_map ||= {}
+      @@combined_js_map[cmp_name] = setup_combined_js_map(cmp_name)
     end
 
-    def self.combined_js
-      @@combined_js
+    def self.combined_js_map
+      @@combined_js_map
     end
 
   end
