@@ -19,13 +19,12 @@ module React
     def self.setup!(react_js, components_js, components_js_map, prerender_snippet, args={})
       args.assert_valid_keys(:size, :timeout)
       @@react_js = react_js
+      @@combined_js_map = {}
       @@components_js_map = components_js_map
+      reset_combined_js_map!
       @@prerender_template = ERB.new(prerender_snippet)
       @@pool.shutdown{} if @@pool
 
-      components_js_map.call.each do |k, v|
-        reset_combined_js_map! k
-      end
 
       default_pool_options = {:size =>10, :timeout => 20}
       @@pool = ConnectionPool.new(default_pool_options.merge(args)) { self.new }
@@ -48,6 +47,8 @@ module React
     def context(cmp_name)
       @context ||= {}
       @context[cmp_name] ||= ExecJS.compile(self.class.combined_js_map[cmp_name])
+    rescue Exception => e
+      return nil
     end
 
     def render(component, url_path, args={})
@@ -73,7 +74,12 @@ module React
           return __outputObj__;
         }()
       JS
-      context(component).eval(jscode)['outputValue'].html_safe
+      ctx = context(component)
+      unless ctx.nil?
+        return ctx.eval(jscode)['outputValue'].html_safe
+      else
+        return "\n\n<!-- #{@@components_js_map.call.keys.join('\n')} -->\n\n".html_safe
+      end
     rescue ExecJS::ProgramError => e
       if e.respond_to? :value
         puts "\nJavascript Error Message:".blue + " #{e.value}".red
@@ -99,17 +105,12 @@ module React
         puts "\nJavascript Error Message:".blue + " #{e}".red
       end
 
-      if ::Rails.env.development?
-        source_str = self.class.combined_js_map[component] + jscode
-        puts "Stack Trace with context: (most recent call first)".blue
-        i = 0
-        e.javascript_backtrace.each do |frame|
-          puts "Frame ##{i}:".blue
-          puts stack_frame_to_s(frame, source_str)
-          i += 1
-        end
+      if e.respond_to? :backtrace
+        raise PrerenderError.new(component, react_props, e.backtrace.join('\n'))
+      else
+        raise PrerenderError.new(component, react_props, e)
       end
-      raise PrerenderError.new(component, react_props, e)
+
     end
 
     def stack_frame_to_s(frame, source_str)
@@ -156,9 +157,11 @@ module React
       CODE
     end
 
-    def self.reset_combined_js_map!(cmp_name)
-      @@combined_js_map ||= {}
-      @@combined_js_map[cmp_name] = setup_combined_js_map(cmp_name)
+    def self.reset_combined_js_map!
+      @@combined_js_map = {}
+      @@components_js_map.call.each do |k, v|
+        @@combined_js_map[k] = setup_combined_js_map(k)
+      end
     end
 
     def self.combined_js_map
