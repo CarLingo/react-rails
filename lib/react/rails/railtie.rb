@@ -68,11 +68,13 @@ module React
       config.after_initialize do |app|
         # Server Rendering
         # Concat component_filenames together for server rendering
+        #logger = ::Rails.logger
+        #logger.info('react-rails') {app.config.react.component_filenames.join(', ')}
         app.config.react.components_js_map = lambda {
           out = {}
 
           app.config.react.component_filenames.map do |filename|
-            contents = app.assets[filename].to_s
+            contents = app.assets[File.basename filename].to_s
             cmp_name = filename.split('/').last.gsub('.js', '').gsub('_', ' ').titleize.gsub(' ', '')
             out[cmp_name] = contents
           end
@@ -82,7 +84,7 @@ module React
 
         app.config.react.components_js = lambda {
           app.config.react.component_filenames.map do |filename|
-            app.assets[filename].to_s
+            app.assets[File.basename filename].to_s
           end.join(";")
         }
 
