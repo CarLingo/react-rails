@@ -75,7 +75,12 @@ module React
       JS
       context(component).eval(jscode)['outputValue'].html_safe
     rescue ExecJS::ProgramError => e
-      puts "\nJavascript Error Message:".blue + " #{e}".red
+      if e.respond_to? :value
+        puts "\nJavascript Error Message:".blue + " #{e.value}".red
+      else
+        puts "\nJavascript Error Message:".blue + " #{e}".red
+      end
+
       if ::Rails.env.development?
         source_str = self.class.combined_js + jscode
         puts "Stack Trace with context: (most recent call first)".blue
@@ -88,7 +93,12 @@ module React
       end
       raise PrerenderError.new(component, react_props, e)
     rescue Exception => e
-      puts "\nJavascript Error Message:".blue + " #{e.value}".red
+      if e.respond_to? :value
+        puts "\nJavascript Error Message:".blue + " #{e.value}".red
+      else
+        puts "\nJavascript Error Message:".blue + " #{e}".red
+      end
+
       if ::Rails.env.development?
         source_str = self.class.combined_js_map[component] + jscode
         puts "Stack Trace with context: (most recent call first)".blue
